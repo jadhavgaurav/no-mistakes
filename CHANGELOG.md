@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.97.0](https://github.com/kunchenguid/no-mistakes/compare/v1.96.0...v1.97.0) (2026-10-14)
+
+
+### Features
+
+* **config:** customize push and evidence commit messages ([#1448](https://github.com/kunchenguid/no-mistakes/issues/1448)) ([5f3dcd1](https://github.com/kunchenguid/no-mistakes/commit/5f3dcd118496dd7375b1625652bf61c336fa6592))
+
+
+### Bug Fixes
+
+* **pipeline:** bound prompts and enforce Test completion ([#1449](https://github.com/kunchenguid/no-mistakes/issues/1449)) ([1afdd47](https://github.com/kunchenguid/no-mistakes/commit/1afdd473303f3f7ad114dfb4ce2131c54db19e75))
+
 ## [1.96.0](https://github.com/kunchenguid/no-mistakes/compare/v1.95.0...v1.96.0) (2026-10-13)
 
 
