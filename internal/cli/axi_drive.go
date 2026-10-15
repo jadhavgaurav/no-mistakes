@@ -1470,6 +1470,11 @@ func successReportHelp(fixes []fixRow) []string {
 	return help
 }
 
+// legacyApprovalReasonRefusal is what a daemon that predates `--action abort`
+// answers to the reason an abort carries: it only accepted one for a Test
+// approval. It refused before recording anything, so the gate stays parked.
+const legacyApprovalReasonRefusal = "an approval reason applies only to Test approval"
+
 func newAxiRespondCmd() *cobra.Command {
 	var action, step, findings, ignore, instructions, addFinding, reason, runID string
 	var autoYes bool
@@ -1494,8 +1499,9 @@ func newAxiRespondCmd() *cobra.Command {
 			"With --action abort, the operator rejects the parked gate: the round is\n" +
 			"recorded as declined, the step fails as \"aborted by user: <reason>\", and the\n" +
 			"run ends failed. --reason is required and is kept in the step error and the\n" +
-			"run error. No fix round starts, nothing is approved or pushed, and the\n" +
-			"commits, findings and evidence stay available; return branch custody through\n" +
+			"run error. No fix round starts and nothing is approved or pushed. Saved\n" +
+			"commits, findings and evidence stay available, but the failed run removes its\n" +
+			"worktree, so save any uncommitted edits first. Return branch custody through\n" +
 			"the structured branch_sync next_action in the output. Unlike `axi abort`,\n" +
 			"which cancels whatever the run is doing, this records a rejection at one\n" +
 			"gate and is refused unless the run is parked there.\n\n" +
@@ -1695,6 +1701,10 @@ func runAxiRespond(cmd *cobra.Command, ra respondArgs) error {
 		var refusal *respondRefusalError
 		if errors.As(err, &refusal) {
 			return emitError(cmd, 2, refusal.refusal, refusal.helpLines(ra.runID)...)
+		}
+		if act == types.ActionAbort && strings.Contains(err.Error(), legacyApprovalReasonRefusal) {
+			return emitError(cmd, 1, "the running daemon is too old to record an abort reason; nothing was recorded and the gate is still parked",
+				"Restart it with `no-mistakes daemon restart` so the current binary serves it, then send the abort again")
 		}
 		return emitError(cmd, 1, fmt.Sprintf("respond to %s: %v", stepName, err))
 	}

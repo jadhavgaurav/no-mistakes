@@ -248,7 +248,7 @@ Run the pipeline and decide on its findings as they come up:
       This does not grant approval authority; escalate ask-user findings as before.
       Without a reason, Test approval remains effective; an approval past a failing command, `no-go`, or `inconclusive` verdict is reported as an exception with no operator reason supplied.
     - `--action abort --reason "<why>"` records the user's decision that the parked gate fails. The reason is required.
-      The round is recorded as declined, no fix round starts, nothing is approved, pushed or merged, and the run ends `failed` with the reason in the step and run errors; commits, findings and evidence stay available.
+      The round is recorded as declined, no fix round starts, nothing is approved, pushed or merged, and the run ends `failed` with the reason in the step and run errors. Saved commits, findings and evidence stay available, but the run's worktree is removed, so uncommitted edits in it are lost.
       Follow the output's `branch_sync.next_action` to get the branch back. It is the user's call, never yours: do not send it to get past a finding, and it is not `axi abort`, which cancels the run instead.
     - `--add-finding '<json>'` (with `--action fix`) folds a finding you
       spotted yourself - one the pipeline did not surface - into the fix round,

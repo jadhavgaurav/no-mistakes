@@ -154,3 +154,30 @@ func TestAxiRespond_UnknownActionListsAbort(t *testing.T) {
 		t.Fatalf("usage output missing the action list:\n%s", out)
 	}
 }
+
+// A CLI upgraded under a still-running older daemon must say so: that daemon
+// refuses the abort's reason with a message about Test approval, which would
+// otherwise read as the operator's mistake. It refused before recording
+// anything, so the gate is still parked.
+func TestAxiRespond_AbortExplainsAnOlderDaemonThatCannotRecordTheReason(t *testing.T) {
+	fx := newAxiTimeoutFixture(t, axiTimeoutOpts{
+		respond: func(context.Context, json.RawMessage) (interface{}, error) {
+			return nil, errors.New("an approval reason applies only to Test approval")
+		},
+	})
+	fx.setGetRun(func(context.Context, int) (*ipc.RunInfo, error) { return fx.awaiting(), nil })
+
+	out, err := executeCmd("axi", "respond", "--action", "abort", "--reason", "unsafe to land", "--wait", "3s")
+	var ee *exitError
+	if !errors.As(err, &ee) || ee.code != 1 {
+		t.Fatalf("error = %v, want exit 1\n%s", err, out)
+	}
+	for _, want := range []string{"too old to record an abort reason", "still parked", "no-mistakes daemon restart"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "applies only to Test approval") {
+		t.Fatalf("the misleading legacy refusal leaked into the output:\n%s", out)
+	}
+}
