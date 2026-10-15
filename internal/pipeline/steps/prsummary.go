@@ -863,7 +863,7 @@ func readEmbeddedArtifactText(fsPath string) (string, error) {
 		if err != nil || !looksLikeTextArtifact(data) {
 			return "", err
 		}
-		return string(data), nil
+		return neutralizePRControls(string(data)), nil
 	}
 
 	file, err := os.Open(fsPath)
@@ -888,7 +888,7 @@ func readEmbeddedArtifactText(fsPath string) (string, error) {
 		return "", nil
 	}
 	omitted := info.Size() - int64(len(head)+len(tail))
-	return string(head) + fmt.Sprintf("\n\n... [%d bytes truncated] ...\n\n", omitted) + string(tail), nil
+	return neutralizePRControls(string(head) + fmt.Sprintf("\n\n... [%d bytes truncated] ...\n\n", omitted) + string(tail)), nil
 }
 
 func looksLikeTextArtifact(data []byte) bool {
