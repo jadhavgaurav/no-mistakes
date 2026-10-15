@@ -103,28 +103,38 @@ func TestRepoGetByPathDoesNotConflateDifferentDirectories(t *testing.T) {
 
 // An exact match is always preferred, and rows an older version registered
 // under several spellings of one directory resolve to the oldest, not to
-// whichever the scan reaches first.
+// whichever sorts first by id. Insertion order breaks a tie in created_at,
+// which is only second resolution.
 func TestRepoGetByPathPrefersTheExactRowThenTheOldest(t *testing.T) {
 	d := openTestDB(t)
 	dir := t.TempDir()
-	aliasA, aliasB := symlinkTo(t, dir), symlinkTo(t, dir)
+	aliasA, aliasB, aliasC := symlinkTo(t, dir), symlinkTo(t, dir), symlinkTo(t, dir)
 
-	older, err := d.InsertRepoWithID("zzz-older", aliasA, "git@github.com:user/a.git", "main")
+	// The ids sort against the insertion order on purpose.
+	first, err := d.InsertRepoWithID("zzz-first", aliasA, "git@github.com:user/a.git", "main")
 	if err != nil {
 		t.Fatal(err)
 	}
-	newer, err := d.InsertRepoWithID("aaa-newer", aliasB, "git@github.com:user/b.git", "main")
+	second, err := d.InsertRepoWithID("aaa-second", aliasB, "git@github.com:user/b.git", "main")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.sql.Exec(`UPDATE repos SET created_at = ? WHERE id = ?`, older.CreatedAt-100, older.ID); err != nil {
+	if _, err := d.sql.Exec(`UPDATE repos SET created_at = ?`, first.CreatedAt); err != nil {
 		t.Fatal(err)
 	}
 
-	if got, err := d.GetRepoByPath(aliasB); err != nil || got == nil || got.ID != newer.ID {
-		t.Fatalf("an exact path match must win: got %+v, %v; want %s", got, err, newer.ID)
+	if got, err := d.GetRepoByPath(aliasB); err != nil || got == nil || got.ID != second.ID {
+		t.Fatalf("an exact path match must win: got %+v, %v; want %s", got, err, second.ID)
 	}
-	if got, err := d.GetRepoByPath(dir); err != nil || got == nil || got.ID != older.ID {
-		t.Fatalf("a third spelling must resolve to the oldest row: got %+v, %v; want %s", got, err, older.ID)
+	if got, err := d.GetRepoByPath(aliasC); err != nil || got == nil || got.ID != first.ID {
+		t.Fatalf("with equal created_at the first inserted row must win: got %+v, %v; want %s", got, err, first.ID)
+	}
+
+	// A strictly older row wins regardless of insertion order.
+	if _, err := d.sql.Exec(`UPDATE repos SET created_at = created_at - 100 WHERE id = ?`, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := d.GetRepoByPath(aliasC); err != nil || got == nil || got.ID != second.ID {
+		t.Fatalf("the older row must win: got %+v, %v; want %s", got, err, second.ID)
 	}
 }

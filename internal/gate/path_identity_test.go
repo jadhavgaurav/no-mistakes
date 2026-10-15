@@ -3,6 +3,7 @@ package gate
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -102,25 +103,50 @@ func TestInitFromAnAlternateSpellingRefreshesTheRegisteredGate(t *testing.T) {
 }
 
 // On a case-sensitive volume two directories whose names differ only in case
-// are different checkouts; the identity lookup must keep them apart.
-func TestInitKeepsCaseDistinctDirectoriesApartOnACaseSensitiveFilesystem(t *testing.T) {
+// are different checkouts: initializing both must register two repositories,
+// and neither lookup may resolve to the other.
+func TestInitKeepsCaseDistinctCheckoutsApartOnACaseSensitiveFilesystem(t *testing.T) {
 	workDir := setupTestRepo(t)
-	variant := swapCase(workDir)
-	if variant == workDir || sameDirectory(variant, workDir) {
+	sibling := filepath.Join(filepath.Dir(workDir), swapCase(filepath.Base(workDir)))
+	if sibling == workDir || sameDirectory(sibling, workDir) {
 		t.Skip("filesystem folds case: the variant is the same directory here")
 	}
+	if out, err := exec.Command("git", "init", sibling).CombinedOutput(); err != nil {
+		t.Fatalf("init sibling: %v: %s", err, out)
+	}
+	origin, err := exec.Command("git", "-C", workDir, "remote", "get-url", "origin").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", sibling, "remote", "add", "origin", strings.TrimSpace(string(origin))).CombinedOutput(); err != nil {
+		t.Fatalf("add origin: %v: %s", err, out)
+	}
+
 	p := paths.WithRoot(t.TempDir())
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
 	d := openTestDB(t, p)
+	ctx := context.Background()
 
-	first, _, err := Init(context.Background(), d, p, workDir)
-	if err != nil {
-		t.Fatal(err)
+	first, created, err := Init(ctx, d, p, workDir)
+	if err != nil || !created {
+		t.Fatalf("init %s = %+v, created %v, err %v", workDir, first, created, err)
 	}
-	if got, err := d.GetRepoByPath(variant); err != nil || got != nil {
-		t.Fatalf("GetRepoByPath(%q) = %+v, %v; a case-distinct path must not resolve to %s", variant, got, err, first.ID)
+	second, created, err := Init(ctx, d, p, sibling)
+	if err != nil || !created {
+		t.Fatalf("init %s = %+v, created %v, err %v; a case-distinct checkout is a new repository", sibling, second, created, err)
+	}
+	if second.ID == first.ID {
+		t.Fatalf("both checkouts resolved to repository %s", first.ID)
+	}
+	if repos, err := d.GetRepos(); err != nil || len(repos) != 2 {
+		t.Fatalf("registered repositories = %d (%v), want two", len(repos), err)
+	}
+	for path, want := range map[string]string{workDir: first.ID, sibling: second.ID} {
+		if got, err := d.GetRepoByPath(path); err != nil || got == nil || got.ID != want {
+			t.Fatalf("GetRepoByPath(%q) = %+v, %v; want %s", path, got, err, want)
+		}
 	}
 }
 

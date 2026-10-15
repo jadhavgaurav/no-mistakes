@@ -170,37 +170,40 @@ func (d *DB) GetRepoByPath(workingPath string) (*Repo, error) {
 	return d.getRepoBySameFile(workingPath)
 }
 
-// getRepoBySameFile scans the registered repos for one whose working path is
-// the same directory as workingPath. If rows registered under different
-// spellings of one directory already exist, the oldest wins, so the answer does
-// not depend on scan order.
+// getRepoBySameFile scans the registered repos, oldest first, for one whose
+// working path is the same directory as workingPath. Rows registered under
+// different spellings of one directory therefore resolve to the oldest, in
+// insertion order (rowid) when created_at ties, rather than to whichever row
+// sorts first by its path-derived id.
 func (d *DB) getRepoBySameFile(workingPath string) (*Repo, error) {
-	var any int
-	if err := d.sql.QueryRow(`SELECT EXISTS(SELECT 1 FROM repos)`).Scan(&any); err != nil {
-		return nil, fmt.Errorf("get repo by path: %w", err)
-	}
-	if any == 0 {
-		return nil, nil
-	}
-	target, err := os.Stat(workingPath)
-	if err != nil {
-		return nil, nil
-	}
-	repos, err := d.GetRepos()
+	rows, err := d.sql.Query(
+		`SELECT id, working_path, upstream_url, COALESCE(fork_url, ''), default_branch, created_at FROM repos ORDER BY created_at, rowid`,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("get repo by path: %w", err)
 	}
-	var match *Repo
-	for _, candidate := range repos {
-		info, err := os.Stat(candidate.WorkingPath)
-		if err != nil || !os.SameFile(target, info) {
-			continue
+	defer rows.Close()
+
+	var target os.FileInfo
+	for rows.Next() {
+		r := &Repo{}
+		if err := rows.Scan(&r.ID, &r.WorkingPath, &r.UpstreamURL, &r.ForkURL, &r.DefaultBranch, &r.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan repo: %w", err)
 		}
-		if match == nil || candidate.CreatedAt < match.CreatedAt {
-			match = candidate
+		if target == nil {
+			// Resolved lazily so an empty table costs no filesystem call.
+			if target, err = os.Stat(workingPath); err != nil {
+				return nil, nil
+			}
+		}
+		if info, err := os.Stat(r.WorkingPath); err == nil && os.SameFile(target, info) {
+			return r, nil
 		}
 	}
-	return match, nil
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("get repo by path: %w", err)
+	}
+	return nil, nil
 }
 
 // ReplaceRepoURLs atomically replaces both registered repository URLs and
