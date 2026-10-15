@@ -330,3 +330,24 @@ func TestParsePROwnedBodyRecoversLegacyAppendixWithLiteralCarets(t *testing.T) {
 		t.Fatal("edited appendix accepted")
 	}
 }
+
+// Past the subset-search cap the all-restored reading must cover every pair,
+// not just the first 64 a uint64 mask can address.
+func TestParsePROwnedBodyRecoversLegacyAppendixWithManyControls(t *testing.T) {
+	t.Parallel()
+	_, appendix := ownedFixture(t)
+	const pairs = 3 * 64
+	appendix += "\n\n```text\n" + strings.Repeat("\x1b[2Kline\n", pairs) + "```"
+	sent := "## Overview\n\nAuthor text\n\n" + wrapPRAppendix(appendix) + "\nCloses test/repo#7"
+	read := ghsanitize.Text(sent)
+	if got := strings.Count(read, "^[[2K"); got != pairs {
+		t.Fatalf("fixture has %d rewritten controls, want %d", got, pairs)
+	}
+	if _, err := parsePROwnedBody(read); err != nil {
+		t.Fatalf("an unedited legacy PR with %d rewritten controls was refused: %v", pairs, err)
+	}
+	edited := strings.Replace(read, "line", "edited", pairs)
+	if _, err := parsePROwnedBody(edited); err == nil {
+		t.Fatal("edited appendix accepted")
+	}
+}
