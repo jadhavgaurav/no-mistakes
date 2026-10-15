@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
 	"github.com/kunchenguid/no-mistakes/internal/config"
@@ -364,5 +365,25 @@ func TestCIStep_CommitRepair_AlreadyPublishedAgentCommitIsNotRewritten(t *testin
 	}
 	if got := fullMessage(t, dir, published); !strings.Contains(got, "already on the remote") {
 		t.Fatalf("published commit message = %q, want it unchanged", got)
+	}
+}
+
+func TestPublishedHeadBoundedContext_AddsDeadlineWithoutTouchingTheRunContext(t *testing.T) {
+	t.Parallel()
+	sctx, _, _ := agentCommitContext(t, nil)
+	if _, ok := sctx.Ctx.Deadline(); ok {
+		t.Fatal("test run context unexpectedly has a deadline")
+	}
+	bounded, cancel := publishedHeadBoundedContext(sctx)
+	defer cancel()
+	deadline, ok := bounded.Ctx.Deadline()
+	if !ok {
+		t.Fatal("remote read has no deadline, so a stalled connection would block the repair")
+	}
+	if remaining := time.Until(deadline); remaining <= 0 || remaining > defaultPublishedHeadResolveWindow {
+		t.Fatalf("deadline in %s, want within %s", remaining, defaultPublishedHeadResolveWindow)
+	}
+	if _, ok := sctx.Ctx.Deadline(); ok {
+		t.Fatal("the run context must keep no deadline")
 	}
 }
