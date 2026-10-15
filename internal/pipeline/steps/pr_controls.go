@@ -53,36 +53,75 @@ func rewrittenByGH(r rune) bool {
 	return r >= 0x80 && r <= 0x9f
 }
 
-// restoreCaretControls maps caret notation back to the C0 control characters gh
-// produces it from, so an appendix that an earlier version stamped over raw
+// maxCaretRecoveryPairs bounds the subset search in appendixDigestMatches. Each
+// extra caret pair doubles the candidates hashed (2^12 candidates of at most one
+// PR body is a fraction of a second).
+const maxCaretRecoveryPairs = 12
+
+// caretControlPositions lists the offsets of the carets that start a pair gh
+// could have produced from a C0 control character.
+func caretControlPositions(s string) []int {
+	var at []int
+	for i := 0; i+1 < len(s); i++ {
+		if s[i] != '^' {
+			continue
+		}
+		if c := s[i+1]; c >= '@' && c <= '_' && c != 'I' && c != 'J' && c != 'K' && c != 'M' {
+			at = append(at, i)
+			i++
+		}
+	}
+	return at
+}
+
+// restoreCaretControlsAt maps the caret pairs at the chosen offsets (bit k of
+// mask selects at[k]) back to the C0 control characters gh produced them from.
+func restoreCaretControlsAt(s string, at []int, mask uint64) string {
+	var b strings.Builder
+	prev := 0
+	for k, i := range at {
+		if mask&(1<<uint(k)) == 0 {
+			continue
+		}
+		b.WriteString(s[prev:i])
+		b.WriteByte(s[i+1] - '@')
+		prev = i + 2
+	}
+	b.WriteString(s[prev:])
+	return b.String()
+}
+
+// restoreCaretControls maps every caret pair back to the C0 control character
+// gh produces it from, so an appendix that an earlier version stamped over raw
 // control bytes can still be recognised as ours. C1 characters share their
 // caret form with C0 and are restored as C0.
 func restoreCaretControls(s string) string {
-	var b strings.Builder
-	for i := 0; i < len(s); i++ {
-		if s[i] != '^' || i+1 >= len(s) {
-			b.WriteByte(s[i])
-			continue
-		}
-		c := s[i+1]
-		switch {
-		case c >= '@' && c <= '_' && c != 'I' && c != 'J' && c != 'K' && c != 'M':
-			b.WriteByte(c - '@')
-			i++
-		default:
-			b.WriteByte('^')
-		}
-	}
-	return b.String()
+	at := caretControlPositions(s)
+	return restoreCaretControlsAt(s, at, ^uint64(0))
 }
 
 // appendixDigestMatches reports whether appendix carries the stamped digest,
 // either byte for byte or after undoing gh's caret rewriting of control bytes
-// that an earlier version embedded.
+// that an earlier version embedded. A caret pair may be a rewritten control
+// byte or text that was always there (`grep '^ERROR'`), so the digest decides
+// which ones to restore: every subset is tried, never a guess.
 func appendixDigestMatches(appendix, digest string) bool {
-	if fmt.Sprintf("%x", sha256.Sum256([]byte(appendix))) == digest {
+	matches := func(s string) bool { return fmt.Sprintf("%x", sha256.Sum256([]byte(s))) == digest }
+	if matches(appendix) {
 		return true
 	}
-	restored := restoreCaretControls(appendix)
-	return restored != appendix && fmt.Sprintf("%x", sha256.Sum256([]byte(restored))) == digest
+	at := caretControlPositions(appendix)
+	if len(at) == 0 {
+		return false
+	}
+	if len(at) > maxCaretRecoveryPairs {
+		// shortcut: beyond the cap only the all-restored reading is tried; raise the cap if legacy PRs mixing that many literal carets turn up.
+		return matches(restoreCaretControlsAt(appendix, at, ^uint64(0)))
+	}
+	for mask := uint64(1); mask < 1<<uint(len(at)); mask++ {
+		if matches(restoreCaretControlsAt(appendix, at, mask)) {
+			return true
+		}
+	}
+	return false
 }
