@@ -3,6 +3,7 @@ package steps
 import (
 	"errors"
 	"fmt"
+	"os/exec"
 	"strings"
 
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
@@ -10,37 +11,25 @@ import (
 )
 
 // errAgentCommitsNotLinear marks agent commits that are not a plain chain of
-// single-parent commits on the head before the agent turn, so their messages cannot be
+// single-parent commits on the recorded head, so their messages cannot be
 // rewritten without restructuring history.
-var errAgentCommitsNotLinear = errors.New("agent commits are not a linear chain from the head before the agent turn")
-
-// markAgentTurnStart records the worktree HEAD just before a fix agent turn so
-// conformAgentCommits can tell the agent's own commits from everything before
-// it. An unreadable HEAD leaves the anchor empty, which rewrites nothing.
-func markAgentTurnStart(sctx *pipeline.StepContext) {
-	head, err := stepGitHeadSHA(sctx)
-	if err != nil {
-		sctx.Log(fmt.Sprintf("warning: could not read head before the agent turn; its own commits keep their messages: %v", err))
-		head = ""
-	}
-	sctx.AgentTurnStartHead = head
-}
+var errAgentCommitsNotLinear = errors.New("agent commits are not a linear chain from the recorded head")
 
 // conformAgentCommits applies the repository's commit settings to commits a fix
 // agent made itself. When the agent runs `git commit`, the worktree is clean and
 // the pipeline would otherwise adopt the agent's subject and trailers as they
 // are, bypassing commit.fix_message and commit.trailers.
 //
-// The rewrite is anchored to the head observed before the agent turn: it only
-// touches the linear, non-merge chain between sctx.AgentTurnStartHead and the
-// worktree HEAD, keeps every tree, author and parent relationship (only the
-// message changes), and moves HEAD with a compare-and-swap against the head it
-// observed. An unexpected shape or a git failure returns an error with the
-// agent's commits untouched, so the change is never dropped and never
-// published unshaped. The anchor is consumed either way.
+// The rewrite is anchored to the head the run has recorded, the same anchor
+// assertPipelineHeadContinuity and ciHeadAwaitsRecording use: every commit above
+// sctx.Run.HeadSHA is work the pipeline has not recorded yet, including commits
+// an earlier failed agent turn left behind. Only a linear, non-merge chain on
+// that head is rewritten. Trees, authors and parents are kept (only the message
+// changes) and HEAD moves with a compare-and-swap against the head observed. An
+// unexpected shape or a git failure returns an error with the agent's commits
+// untouched, so the change is never dropped and never published unshaped.
 func conformAgentCommits(sctx *pipeline.StepContext, stepName types.StepName, render func() (string, error)) error {
-	anchor := strings.TrimSpace(sctx.AgentTurnStartHead)
-	sctx.AgentTurnStartHead = ""
+	anchor := strings.TrimSpace(sctx.Run.HeadSHA)
 	if anchor == "" {
 		return nil
 	}
@@ -53,6 +42,15 @@ func conformAgentCommits(sctx *pipeline.StepContext, stepName types.StepName, re
 	}
 	// An unfinished rebase or merge makes HEAD a partial result; leave it alone.
 	if rebaseInProgress(sctx.Ctx, sctx.WorkDir) || mergeInProgress(sctx.Ctx, sctx.WorkDir) {
+		return nil
+	}
+	descends, err := headDescendsFrom(sctx, anchor, head)
+	if err != nil {
+		return fmt.Errorf("inspect %s agent commits: %w", stepName, err)
+	}
+	if !descends {
+		// A rebase rewrote history instead of extending the recorded head. That
+		// is not the agent adding commits; continuity checks own that case.
 		return nil
 	}
 	chain, err := agentCommitChain(sctx, anchor, head)
@@ -93,6 +91,17 @@ func conformAgentCommits(sctx *pipeline.StepContext, stepName types.StepName, re
 	}
 	sctx.Log(fmt.Sprintf("applied commit settings to %d agent commit(s)", len(chain)))
 	return nil
+}
+
+// headDescendsFrom reports whether anchor is an ancestor of head. Exit status 1
+// is git's answer "no"; any other failure is an error.
+func headDescendsFrom(sctx *pipeline.StepContext, anchor, head string) (bool, error) {
+	_, err := stepGitRun(sctx, "merge-base", "--is-ancestor", anchor, head)
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // agentCommitChain lists the commits in anchor..head oldest first and

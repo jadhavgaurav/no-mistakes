@@ -141,8 +141,6 @@ func (s *DocumentStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcom
 	// comparing it after the pass detects changes a clean status would hide.
 	headBefore := sctx.Run.HeadSHA
 
-	markAgentTurnStart(sctx)
-	defer func() { sctx.AgentTurnStartHead = "" }()
 	result, err := sctx.RunAgentContext(ctx, agent.RunOpts{
 		Prompt:     prompt,
 		CWD:        sctx.WorkDir,

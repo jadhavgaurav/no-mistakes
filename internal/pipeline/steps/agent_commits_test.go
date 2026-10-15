@@ -31,7 +31,6 @@ func agentCommitContext(t *testing.T, trailers []string) (*pipeline.StepContext,
 	gitCmd(t, dir, "checkout", "--detach", headSHA)
 	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "claude"}, dir, baseSHA, headSHA, config.Commands{})
 	sctx.Config.Commit = config.Commit{Trailers: trailers}
-	markAgentTurnStart(sctx)
 	return sctx, dir, headSHA
 }
 
@@ -200,15 +199,14 @@ func TestCommitAgentFixes_InvalidTemplateKeepsAgentCommit(t *testing.T) {
 	}
 }
 
-func TestCommitAgentFixes_CommitsBeforeTheAgentTurnAreNeverRewritten(t *testing.T) {
+func TestCommitAgentFixes_CommitsAtOrBelowTheRecordedHeadAreNeverRewritten(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	gitCmd(t, dir, "checkout", "--detach", headSHA)
-	// The recorded head lags a commit the author made: not the agent's work.
+	// The author's own commit is part of the head the run recorded.
 	agentCommit(t, dir, "author.txt", "author subject")
 	authorHead := gitCmd(t, dir, "rev-parse", "HEAD")
-	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "claude"}, dir, baseSHA, headSHA, config.Commands{})
-	markAgentTurnStart(sctx)
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "claude"}, dir, baseSHA, authorHead, config.Commands{})
 	agentCommit(t, dir, "agent.txt", "agent subject")
 
 	if _, err := commitAgentFixesWithResult(sctx, types.StepReview, "repair", "fallback", nil); err != nil {
@@ -222,19 +220,14 @@ func TestCommitAgentFixes_CommitsBeforeTheAgentTurnAreNeverRewritten(t *testing.
 	}
 }
 
-func TestCommitAgentFixes_WithoutATurnAnchorNothingIsRewritten(t *testing.T) {
+func TestCommitAgentFixes_NoAgentCommitLeavesTheHeadAlone(t *testing.T) {
 	t.Parallel()
-	dir, baseSHA, headSHA := setupGitRepo(t)
-	gitCmd(t, dir, "checkout", "--detach", headSHA)
-	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "claude"}, dir, baseSHA, headSHA, config.Commands{})
-	agentCommit(t, dir, "agent.txt", "agent subject")
-	before := gitCmd(t, dir, "rev-parse", "HEAD")
-
+	sctx, dir, headSHA := agentCommitContext(t, nil)
 	if _, err := commitAgentFixesWithResult(sctx, types.StepReview, "repair", "fallback", nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := gitCmd(t, dir, "rev-parse", "HEAD"); got != before {
-		t.Fatalf("HEAD = %s, want unchanged %s", got, before)
+	if got := gitCmd(t, dir, "rev-parse", "HEAD"); got != headSHA {
+		t.Fatalf("HEAD = %s, want unchanged %s", got, headSHA)
 	}
 }
 
@@ -261,9 +254,6 @@ func TestExecuteFixMode_AgentOwnCommitFollowsCommitSettings(t *testing.T) {
 	if sctx.Run.HeadSHA != gitCmd(t, dir, "rev-parse", "HEAD") {
 		t.Fatalf("run head = %s, want the rewritten head", sctx.Run.HeadSHA)
 	}
-	if sctx.AgentTurnStartHead != "" {
-		t.Fatalf("turn anchor left set: %q", sctx.AgentTurnStartHead)
-	}
 }
 
 func TestCIStep_CommitRepair_AgentOwnCommitFollowsCommitSettings(t *testing.T) {
@@ -280,5 +270,71 @@ func TestCIStep_CommitRepair_AgentOwnCommitFollowsCommitSettings(t *testing.T) {
 	}
 	if got := gitCmd(t, dir, "rev-parse", "HEAD~1"); got != headSHA {
 		t.Fatalf("parent = %s, want %s", got, headSHA)
+	}
+}
+
+func TestCIStep_CommitRepair_RetainedAgentCommitFromAFailedTurnFollowsCommitSettings(t *testing.T) {
+	t.Parallel()
+	sctx, dir, headSHA := agentCommitContext(t, attributionTrailers[1:])
+	sctx.Config.CI.RevalidateRepairs = true
+	// An earlier turn committed and then failed, so nothing was recorded; the
+	// retry has no producer and changes nothing itself.
+	agentCommit(t, dir, "agent.txt", "fix(tests): left behind by a failed turn")
+
+	if _, err := (&CIStep{}).commitRepair(sctx, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := fullMessage(t, dir, "HEAD"), "no-mistakes(ci): repair failing checks"; got != want {
+		t.Fatalf("commit message = %q, want %q", got, want)
+	}
+	if got := gitCmd(t, dir, "rev-parse", "HEAD~1"); got != headSHA {
+		t.Fatalf("parent = %s, want %s", got, headSHA)
+	}
+}
+
+func agentMergeCommit(t *testing.T, dir, recorded string) {
+	t.Helper()
+	agentCommit(t, dir, "left.txt", "left")
+	left := gitCmd(t, dir, "rev-parse", "HEAD")
+	gitCmd(t, dir, "checkout", "--detach", recorded)
+	agentCommit(t, dir, "right.txt", "right")
+	gitCmd(t, dir, "merge", "--no-ff", "-m", "merge", left)
+}
+
+func TestCIStep_CommitRepair_MergeFromAnOrdinaryRepairIsRefused(t *testing.T) {
+	t.Parallel()
+	sctx, dir, _ := agentCommitContext(t, nil)
+	sctx.Config.CI.RevalidateRepairs = true
+	agentMergeCommit(t, dir, sctx.Run.HeadSHA)
+	merged := gitCmd(t, dir, "rev-parse", "HEAD")
+
+	_, err := (&CIStep{}).commitRepair(sctx, "repair", nil)
+	if err == nil || !strings.Contains(err.Error(), "not a linear chain") {
+		t.Fatalf("err = %v, want a refusal of the non-linear chain", err)
+	}
+	if got := gitCmd(t, dir, "rev-parse", "HEAD"); got != merged {
+		t.Fatalf("HEAD = %s, want the agent's merge %s kept", got, merged)
+	}
+}
+
+func TestCIStep_CommitRepair_RebasedHistoryKeepsItsCommitsAndRevalidates(t *testing.T) {
+	t.Parallel()
+	sctx, dir, _ := agentCommitContext(t, nil)
+	sctx.Config.CI.RevalidateRepairs = true
+	// A rebase repair rewrites history: the new head does not descend from the
+	// recorded one, so its commits are not the agent extending the head.
+	gitCmd(t, dir, "checkout", "--detach", sctx.Run.BaseSHA)
+	agentCommit(t, dir, "rebased.txt", "rebased subject")
+	rebased := gitCmd(t, dir, "rev-parse", "HEAD")
+
+	repair, err := (&CIStep{}).commitRepair(sctx, "repair", nil)
+	if err != nil {
+		t.Fatalf("a rebasing repair must not be refused: %v", err)
+	}
+	if got := gitCmd(t, dir, "rev-parse", "HEAD"); got != rebased {
+		t.Fatalf("HEAD = %s, want the rebased history %s untouched", got, rebased)
+	}
+	if !repair.HeadAdvanced || !repair.Revalidate {
+		t.Fatalf("repair = %+v, want the head recorded for revalidation", repair)
 	}
 }

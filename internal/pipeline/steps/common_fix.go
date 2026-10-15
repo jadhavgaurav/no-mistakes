@@ -543,8 +543,6 @@ func executeFixMode(sctx *pipeline.StepContext, stepName types.StepName, opts fi
 	}
 	var result *agent.Result
 	var err error
-	markAgentTurnStart(sctx)
-	defer func() { sctx.AgentTurnStartHead = "" }()
 	if opts.RunAgent != nil {
 		result, err = opts.RunAgent(runOpts)
 	} else {

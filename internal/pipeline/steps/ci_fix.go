@@ -269,8 +269,6 @@ CI logs:
 	prompt = fixerPrompt(testguidance.LateRepairPrompt(string(s.Name()), prompt))
 
 	sctx.Log("running agent to fix CI issues...")
-	markAgentTurnStart(sctx)
-	defer func() { sctx.AgentTurnStartHead = "" }()
 	result, err := sctx.RunAgentContext(ctx, agent.RunOpts{
 		Prompt:     prompt,
 		CWD:        sctx.WorkDir,
@@ -630,11 +628,7 @@ func (s *CIStep) commitRepair(sctx *pipeline.StepContext, summary string, produc
 		}
 		return message, nil
 	}
-	// A merge-conflict repair rebases, so its chain legitimately is not a
-	// plain extension of the recorded head; those commits are left as they are.
-	if err := conformAgentCommits(sctx, types.StepCI, render); errors.Is(err, errAgentCommitsNotLinear) {
-		sctx.Log("warning: " + err.Error())
-	} else if err != nil {
+	if err := conformAgentCommits(sctx, types.StepCI, render); err != nil {
 		return ciRepairResult{}, err
 	}
 	status, err := stepGitRun(sctx, "status", "--porcelain")
