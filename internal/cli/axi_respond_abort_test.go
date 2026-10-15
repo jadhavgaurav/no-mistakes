@@ -158,7 +158,7 @@ func TestAxiRespond_UnknownActionListsAbort(t *testing.T) {
 // A CLI upgraded under a still-running older daemon must say so: that daemon
 // refuses the abort's reason with a message about Test approval, which would
 // otherwise read as the operator's mistake. It refused before recording
-// anything, so the gate is still parked.
+// anything, and the restart needs --force while the gate's run is active.
 func TestAxiRespond_AbortExplainsAnOlderDaemonThatCannotRecordTheReason(t *testing.T) {
 	fx := newAxiTimeoutFixture(t, axiTimeoutOpts{
 		respond: func(context.Context, json.RawMessage) (interface{}, error) {
@@ -172,7 +172,7 @@ func TestAxiRespond_AbortExplainsAnOlderDaemonThatCannotRecordTheReason(t *testi
 	if !errors.As(err, &ee) || ee.code != 1 {
 		t.Fatalf("error = %v, want exit 1\n%s", err, out)
 	}
-	for _, want := range []string{"too old to record an abort reason", "still parked", "no-mistakes daemon restart"} {
+	for _, want := range []string{"too old to record an abort reason", "nothing was recorded", "no-mistakes daemon restart --force"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("output missing %q:\n%s", want, out)
 		}

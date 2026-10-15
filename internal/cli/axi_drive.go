@@ -1703,8 +1703,8 @@ func runAxiRespond(cmd *cobra.Command, ra respondArgs) error {
 			return emitError(cmd, 2, refusal.refusal, refusal.helpLines(ra.runID)...)
 		}
 		if act == types.ActionAbort && strings.Contains(err.Error(), legacyApprovalReasonRefusal) {
-			return emitError(cmd, 1, "the running daemon is too old to record an abort reason; nothing was recorded and the gate is still parked",
-				"Restart it with `no-mistakes daemon restart` so the current binary serves it, then send the abort again")
+			return emitError(cmd, 1, "the running daemon is too old to record an abort reason; nothing was recorded",
+				"A restart refuses while runs are active: review them with `no-mistakes daemon status`, then run `no-mistakes daemon restart --force` so the current binary serves it, and send the abort again")
 		}
 		return emitError(cmd, 1, fmt.Sprintf("respond to %s: %v", stepName, err))
 	}
