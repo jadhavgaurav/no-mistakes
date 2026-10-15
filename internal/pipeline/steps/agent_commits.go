@@ -63,7 +63,8 @@ func conformAgentCommits(sctx *pipeline.StepContext, stepName types.StepName, re
 	}
 
 	parent, changed := anchor, false
-	for _, sha := range chain {
+	published, resolvedPublished := -1, false
+	for i, sha := range chain {
 		info, err := stepGitRun(sctx, "show", "-s", "--date=raw", "--format=%T%x1f%an%x1f%ae%x1f%ad%x1f%B", sha)
 		if err != nil {
 			return fmt.Errorf("read %s agent commit %s: %w", stepName, sha, err)
@@ -73,6 +74,19 @@ func conformAgentCommits(sctx *pipeline.StepContext, stepName types.StepName, re
 			return fmt.Errorf("read %s agent commit %s: unexpected git output", stepName, sha)
 		}
 		if !changed && strings.TrimSpace(fields[4]) == message {
+			parent = sha
+			continue
+		}
+		// A CI repair can reach the remote while the run's head still lags (the
+		// mirror or database write failed). The retry must finish that publication,
+		// not replace what is already published, so those commits stay as they are.
+		if !resolvedPublished {
+			if published, err = publishedChainIndex(sctx, stepName, chain); err != nil {
+				return err
+			}
+			resolvedPublished = true
+		}
+		if i <= published {
 			parent = sha
 			continue
 		}
@@ -91,6 +105,27 @@ func conformAgentCommits(sctx *pipeline.StepContext, stepName types.StepName, re
 	}
 	sctx.Log(fmt.Sprintf("applied commit settings to %d agent commit(s)", len(chain)))
 	return nil
+}
+
+// publishedChainIndex returns the index in chain of the commit the remote
+// branch already points at, or -1. Only a CI repair publishes before the run
+// records its head, so other steps skip the remote query. A query failure is
+// an error: the commits are then left untouched rather than risk rewriting
+// published history.
+func publishedChainIndex(sctx *pipeline.StepContext, stepName types.StepName, chain []string) (int, error) {
+	if stepName != types.StepCI {
+		return -1, nil
+	}
+	tip, err := lsRemoteSHA(func(args ...string) (string, error) { return stepGitRun(sctx, args...) }, resolvePushURL(sctx), normalizedBranchRef(sctx.Run.Branch))
+	if err != nil {
+		return -1, fmt.Errorf("check which %s agent commits are already published: %w", stepName, err)
+	}
+	for i, sha := range chain {
+		if strings.EqualFold(sha, tip) {
+			return i, nil
+		}
+	}
+	return -1, nil
 }
 
 // headDescendsFrom reports whether anchor is an ancestor of head. Exit status 1

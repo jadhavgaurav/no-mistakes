@@ -338,3 +338,31 @@ func TestCIStep_CommitRepair_RebasedHistoryKeepsItsCommitsAndRevalidates(t *test
 		t.Fatalf("repair = %+v, want the head recorded for revalidation", repair)
 	}
 }
+
+func TestCIStep_CommitRepair_AlreadyPublishedAgentCommitIsNotRewritten(t *testing.T) {
+	t.Parallel()
+	sctx, dir, _ := agentCommitContext(t, nil)
+	sctx.Config.CI.RevalidateRepairs = true
+	// The earlier attempt reached the remote but the run's head was never
+	// recorded, so the published commit still sits above the recorded head.
+	agentCommit(t, dir, "published.txt", "fix(tests): already on the remote")
+	published := gitCmd(t, dir, "rev-parse", "HEAD")
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	gitCmd(t, dir, "init", "--bare", remote)
+	gitCmd(t, dir, "push", remote, published+":refs/heads/feature")
+	gitCmd(t, dir, "remote", "set-url", "origin", remote)
+	agentCommit(t, dir, "local.txt", "fix(tests): not published yet")
+
+	if _, err := (&CIStep{}).commitRepair(sctx, "retry summary", nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := gitCmd(t, dir, "rev-parse", "HEAD~1"); got != published {
+		t.Fatalf("parent = %s, want the published commit %s kept as it is", got, published)
+	}
+	if got, want := fullMessage(t, dir, "HEAD"), "no-mistakes(ci): retry summary"; got != want {
+		t.Fatalf("unpublished commit message = %q, want %q", got, want)
+	}
+	if got := fullMessage(t, dir, published); !strings.Contains(got, "already on the remote") {
+		t.Fatalf("published commit message = %q, want it unchanged", got)
+	}
+}
