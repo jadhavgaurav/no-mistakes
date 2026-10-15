@@ -175,6 +175,13 @@ func (d *DB) GetRepoByPath(workingPath string) (*Repo, error) {
 // spellings of one directory already exist, the oldest wins, so the answer does
 // not depend on scan order.
 func (d *DB) getRepoBySameFile(workingPath string) (*Repo, error) {
+	var any int
+	if err := d.sql.QueryRow(`SELECT EXISTS(SELECT 1 FROM repos)`).Scan(&any); err != nil {
+		return nil, fmt.Errorf("get repo by path: %w", err)
+	}
+	if any == 0 {
+		return nil, nil
+	}
 	target, err := os.Stat(workingPath)
 	if err != nil {
 		return nil, nil
