@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/kunchenguid/no-mistakes/internal/pipeline/fakecli/ghsanitize"
 	"github.com/kunchenguid/no-mistakes/internal/scm/plugin/fakeplugin"
 )
 
@@ -592,6 +593,10 @@ func fakeGHHandlePRContentCommands(args []string, joined string) {
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
+		}
+		if os.Getenv("FAKE_CLI_GH_SANITIZE") != "" {
+			// The real gh rewrites control characters in every API response.
+			payload = ghsanitize.JSON(payload)
 		}
 		fmt.Println(string(payload))
 		os.Exit(0)
