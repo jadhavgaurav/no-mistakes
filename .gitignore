@@ -4,6 +4,7 @@ tmp/
 /result
 /result-*
 .tmp/
+/fakecli
 
 # Go
 *.exe
