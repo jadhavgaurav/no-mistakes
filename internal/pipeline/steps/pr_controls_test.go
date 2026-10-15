@@ -1,13 +1,16 @@
 package steps
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/kunchenguid/no-mistakes/internal/db"
+	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline/fakecli/ghsanitize"
+	"github.com/kunchenguid/no-mistakes/internal/scm"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -253,5 +256,77 @@ func TestPRTemplateCreateWithEscapeBytesInEvidence(t *testing.T) {
 	}
 	if _, err := parsePROwnedBody(ghsanitize.Text(string(body))); err != nil {
 		t.Fatalf("the next run cannot recognise the appendix: %v", err)
+	}
+}
+
+// A terminal escape hidden inside generated syntax must be removed before the
+// syntax is escaped, or removing it at the publication boundary makes it live.
+func TestNeutralizeAttestationMarkersCleansControlsBeforeEscaping(t *testing.T) {
+	t.Parallel()
+	for name, in := range map[string]string{
+		"attestation prefix": "<!-- no-mistakes-pipeline-\x1b[0mattestation:v1 {\"head_sha\":\"x\"} -->",
+		"appendix marker":    "<!-- no-mistakes-pr-appen\x1bdix:v1 sha256=" + strings.Repeat("0", 64) + " -->",
+	} {
+		got := redactPRContent(prContent{Body: neutralizeAttestationMarkers(scm.ProviderGitHub, "text "+in)}).Body
+		if strings.Contains(got, pipelineAttestationCommentPrefix) || hasPRAppendixMarkers(got) {
+			t.Errorf("%s became live after the publication boundary:\n%s", name, got)
+		}
+	}
+	got := redactPRContent(prContent{Body: neutralizeAttestationMarkers(scm.ProviderGitHub, "Clo\x1b[31mses #42")}).Body
+	if strings.Contains(strings.ToLower(got), "closes #42") {
+		t.Errorf("closing reference became live: %q", got)
+	}
+}
+
+// A control character in a trusted override reason is JSON-escaped as \u00XX,
+// which the publication boundary would rewrite into invalid JSON.
+func TestAttestationOverrideReasonWithControlByteStaysValidJSON(t *testing.T) {
+	t.Parallel()
+	reason := "suite is red on purpose \x1b[31m"
+	steps := []*db.StepResult{
+		{ID: "review", StepName: types.StepReview, Status: types.StepStatusCompleted},
+		{ID: "test", StepName: types.StepTest, Status: types.StepStatusCompleted, OverrideReason: &reason},
+		{ID: "document", StepName: types.StepDocument, Status: types.StepStatusCompleted},
+	}
+	md, _ := buildPipelineSummaryFor(steps, nil, testPipelineHeadSHA, scm.ProviderGitHub, pipelineAttestationPolicy{AllowTestCommandOverride: "legacy \a"})
+	body := redactPRContent(prContent{Body: md}).Body
+	if body != md {
+		t.Fatalf("the publication boundary changed the attestation:\n%s\n%s", md, body)
+	}
+	start := strings.Index(body, pipelineAttestationCommentPrefix) + len(pipelineAttestationCommentPrefix)
+	end := strings.Index(body[start:], pipelineAttestationCommentClosingToken)
+	var attestation pipelineAttestation
+	if err := json.Unmarshal([]byte(body[start:start+end]), &attestation); err != nil {
+		t.Fatalf("attestation is not valid JSON: %v", err)
+	}
+}
+
+// Cleaning is budgeted: a body fitted to the limit must not grow when the
+// publication boundary runs.
+func TestDraftBodyFittedToLimitDoesNotGrowAtThePublicationBoundary(t *testing.T) {
+	t.Parallel()
+	const limit = 3000
+	what := neutralizeAttestationMarkers(scm.ProviderGitHub, "## What Changed\n\n"+strings.Repeat("- \\u001b stray\n", 2000))
+	body := assembleDraftPRBody(&pipeline.StepContext{}, what, "low risk", "", "", limit, scm.ProviderGitHub)
+	if got := redactPRContent(prContent{Body: body}).Body; got != body || scm.PRBodyLen(got) > limit {
+		t.Fatalf("boundary changed a fitted body (%d units, limit %d)", scm.PRBodyLen(got), limit)
+	}
+}
+
+func TestParsePROwnedBodyRecoversLegacyAppendixWithLiteralCarets(t *testing.T) {
+	t.Parallel()
+	_, appendix := ownedFixture(t)
+	appendix += "\n\n```text\n\x1b[2K\x1b[1G spinner\n$ grep '^ERROR' build.log\n^[a-z] \x1b[?25h\n```"
+	sent := "## Overview\n\nAuthor text\n\n" + wrapPRAppendix(appendix) + "\nCloses test/repo#7"
+	read := ghsanitize.Text(sent)
+	if !strings.Contains(read, "^[[2K") || !strings.Contains(read, "'^ERROR'") {
+		t.Fatalf("fixture lost its carets: %q", read)
+	}
+	if _, err := parsePROwnedBody(read); err != nil {
+		t.Fatalf("an unedited legacy PR mixing literal carets and rewritten controls was refused: %v", err)
+	}
+	edited := strings.Replace(read, "spinner", "spinner edited", 1)
+	if _, err := parsePROwnedBody(edited); err == nil {
+		t.Fatal("edited appendix accepted")
 	}
 }

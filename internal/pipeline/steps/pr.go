@@ -444,7 +444,16 @@ func (s *PRStep) buildPRContent(sctx *pipeline.StepContext, branch, baseBranch, 
 	if err != nil {
 		return prContent{}, err
 	}
-	return redactPRContent(content), nil
+	redacted := redactPRContent(content)
+	// Component text is cleaned before it is budgeted, so redaction should not
+	// grow the body. If it does, the body was never fitted to the limit: refuse
+	// rather than send one the provider rejects or truncates.
+	if len(redacted.Body) > len(content.Body) {
+		if err := validateOwnedPRBudget(redacted.Body, bodyLimit); err != nil {
+			return prContent{}, err
+		}
+	}
+	return redacted, nil
 }
 
 // redactPRContent removes the operator's home directory, and the control

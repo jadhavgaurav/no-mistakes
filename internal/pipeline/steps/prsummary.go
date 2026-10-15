@@ -203,9 +203,11 @@ func newPipelineAttestation(steps []*db.StepResult, rounds map[string][]*db.Step
 			Status: sr.Status,
 		}
 		if sr.StepName == types.StepTest && sr.OverrideReason != nil {
-			item.OverrideReason = strings.TrimSpace(*sr.OverrideReason)
+			// Free text: JSON would write a control byte as \u00XX, which the
+			// publication boundary rewrites into a form that is not valid JSON.
+			item.OverrideReason = neutralizePRControls(strings.TrimSpace(*sr.OverrideReason))
 			if item.OverrideReason != "" {
-				attestation.AllowTestCommandOverride = strings.TrimSpace(policy.AllowTestCommandOverride)
+				attestation.AllowTestCommandOverride = neutralizePRControls(strings.TrimSpace(policy.AllowTestCommandOverride))
 			}
 		}
 		attestation.Steps = append(attestation.Steps, item)
@@ -1648,7 +1650,12 @@ func escapePipelineFoldMarkers(s string) string {
 // (closingGrammarFor), since every PR-body site that generates text passes
 // through here - the grammar has to travel with the text, because GitLab
 // resolves a reference inside a code block where GitHub does not.
+//
+// Control characters are cleaned first: the publication boundary strips them
+// again, and a terminal escape hidden inside a marker or closing keyword would
+// otherwise hide it from these escapes and become live once it is removed.
 func neutralizeAttestationMarkers(provider scm.Provider, s string) string {
+	s = neutralizePRControls(s)
 	escaped := escapePRAppendixMarkers(strings.ReplaceAll(s, pipelineAttestationCommentPrefix, escapedPipelineAttestationCommentPrefix))
 	return closingGrammarFor(provider).neutralize(escaped)
 }
