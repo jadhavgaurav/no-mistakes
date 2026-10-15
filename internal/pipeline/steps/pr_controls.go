@@ -74,13 +74,14 @@ func caretControlPositions(s string) []int {
 	return at
 }
 
-// restoreCaretControlsAt maps the caret pairs at the chosen offsets (bit k of
-// mask selects at[k]) back to the C0 control characters gh produced them from.
-func restoreCaretControlsAt(s string, at []int, mask uint64) string {
+// restoreCaretControlsAt maps the caret pairs at the offsets for which restore
+// returns true (called with the index k into at) back to the C0 control
+// characters gh produced them from.
+func restoreCaretControlsAt(s string, at []int, restore func(k int) bool) string {
 	var b strings.Builder
 	prev := 0
 	for k, i := range at {
-		if mask&(1<<uint(k)) == 0 {
+		if !restore(k) {
 			continue
 		}
 		b.WriteString(s[prev:i])
@@ -97,8 +98,10 @@ func restoreCaretControlsAt(s string, at []int, mask uint64) string {
 // caret form with C0 and are restored as C0.
 func restoreCaretControls(s string) string {
 	at := caretControlPositions(s)
-	return restoreCaretControlsAt(s, at, ^uint64(0))
+	return restoreCaretControlsAt(s, at, restoreAll)
 }
+
+func restoreAll(int) bool { return true }
 
 // appendixDigestMatches reports whether appendix carries the stamped digest,
 // either byte for byte or after undoing gh's caret rewriting of control bytes
@@ -116,10 +119,10 @@ func appendixDigestMatches(appendix, digest string) bool {
 	}
 	if len(at) > maxCaretRecoveryPairs {
 		// shortcut: beyond the cap only the all-restored reading is tried; raise the cap if legacy PRs mixing that many literal carets turn up.
-		return matches(restoreCaretControlsAt(appendix, at, ^uint64(0)))
+		return matches(restoreCaretControlsAt(appendix, at, restoreAll))
 	}
 	for mask := uint64(1); mask < 1<<uint(len(at)); mask++ {
-		if matches(restoreCaretControlsAt(appendix, at, mask)) {
+		if matches(restoreCaretControlsAt(appendix, at, func(k int) bool { return mask&(1<<uint(k)) != 0 })) {
 			return true
 		}
 	}
