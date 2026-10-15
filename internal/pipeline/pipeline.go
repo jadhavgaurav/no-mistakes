@@ -141,6 +141,11 @@ type StepContext struct {
 	// OnPRMerged is a best-effort hook after a merged PR state is persisted.
 	// Eval uses it to relabel auto-fix/shipped-unfixed gold; nil is a no-op.
 	OnPRMerged func(ctx context.Context, runID string)
+	// AgentTurnStartHead is the worktree HEAD observed immediately before the
+	// latest fix agent turn started. Only commits after it are the agent's own,
+	// so only they may be rewritten to the repository's commit settings. Empty
+	// when no turn is being committed.
+	AgentTurnStartHead string
 	// ClosingIssueRefs are the explicit --closes values claimed from the DB at
 	// PR-step start. Steps read this snapshot instead of mutable run state.
 	ClosingIssueRefs []string

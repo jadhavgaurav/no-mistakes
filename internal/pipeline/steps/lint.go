@@ -120,6 +120,8 @@ Rules:
 Previous lint findings to address:
 ` + sanitizedPreviousFindingsForPrompt(sctx.PreviousFindings)
 		}
+		markAgentTurnStart(sctx)
+		defer func() { sctx.AgentTurnStartHead = "" }()
 		result, err := sctx.RunAgentContext(ctx, agent.RunOpts{
 			Prompt:     fixerPrompt(prompt),
 			CWD:        sctx.WorkDir,
