@@ -494,6 +494,14 @@ type ReviewRaw struct {
 	// at least one changed file; a run that touches nothing matching leaves
 	// the review prompt exactly as it is without this setting.
 	PathInstructions []PathInstruction `yaml:"path_instructions"`
+	// AgentTimeout is an optional per-repository Review invocation stall
+	// budget, a Go duration such as "10m". It can only tighten the global
+	// review_agent_timeout: a longer value is ignored, so a repository cannot
+	// weaken the machine's policy. Like the rest of this block it is honored
+	// ONLY from the trusted default-branch copy, because the pushed branch is
+	// the thing the timeout gates and must not be able to loosen, or choose,
+	// the budget of its own review.
+	AgentTimeout string `yaml:"agent_timeout"`
 }
 
 // PRRaw is the YAML representation of pull-request settings.
@@ -3109,10 +3117,30 @@ func validatePRRaw(pr PRRaw) error {
 // invalid block has to fail here, before it merges, rather than brick the
 // repository's pipeline afterwards. Do not scope this to the trusted copy.
 func validateReviewRaw(review ReviewRaw) error {
+	if review.AgentTimeout != "" {
+		if _, err := parsePositiveDuration("review.agent_timeout", review.AgentTimeout); err != nil {
+			return err
+		}
+	}
 	if err := validatePathInstructionEntries(review.PathInstructions); err != nil {
 		return err
 	}
 	return validatePathInstructionsBudget([]PathInstructionSource{{Heading: ReviewPathInstructionsHeading, Entries: review.PathInstructions}})
+}
+
+// trustedReviewAgentTimeout returns the repository's review.agent_timeout, or 0
+// when it is unset. LoadRepoFromBytes already rejected an unparsable or
+// non-positive value, so a hand-built RepoConfig carrying one is treated as
+// unset: the global budget then stands, which can never loosen the policy.
+func trustedReviewAgentTimeout(review ReviewRaw) time.Duration {
+	if review.AgentTimeout == "" {
+		return 0
+	}
+	d, err := parsePositiveDuration("review.agent_timeout", review.AgentTimeout)
+	if err != nil {
+		return 0
+	}
+	return d
 }
 
 func validatePathInstructionEntries(entries []PathInstruction) error {
@@ -4018,6 +4046,14 @@ func merge(global *GlobalConfig, repo *RepoConfig, override *RepositoryOverride)
 		// trusted-only (EffectiveRepoConfig sourced it from the trusted copy).
 		DisableProjectSettings: repo.DisableProjectSettings,
 		NoCI:                   repo.NoCI,
+	}
+
+	// repo.Review is trusted-only (EffectiveRepoConfig). The repository value
+	// only ever tightens the global budget, and a tightened budget counts as a
+	// configured timeout for crash-retry purposes, like any other configured one.
+	if repoTimeout := trustedReviewAgentTimeout(repo.Review); repoTimeout > 0 && repoTimeout < cfg.ReviewAgentTimeout {
+		cfg.ReviewAgentTimeout = repoTimeout
+		cfg.AgentTimeoutsConfigured = true
 	}
 
 	if override != nil {
