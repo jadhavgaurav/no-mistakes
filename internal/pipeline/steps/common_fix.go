@@ -39,6 +39,10 @@ type fixExecutionOptions struct {
 	// Workload records the bounded size of the change under fix for local
 	// telemetry. Optional; nil leaves the invocation's workload unknown.
 	Workload *agent.InvocationWorkload
+	// ReportBlockedVerification asks the fixer for the optional
+	// verification_blocked result field and logs it. Only the Review fix turn
+	// sets it: it is the one fix prompt that orders edits before verification.
+	ReportBlockedVerification bool
 }
 
 type commitSummary struct {
@@ -75,6 +79,57 @@ var commitSummarySchema = json.RawMessage(fmt.Sprintf(`{
 	},
 	"required": ["summary"]
 }`, config.MaxFixMessageSummaryBytes))
+
+// maxVerificationBlockedBytes bounds the optional verification_blocked field
+// of a fix result. The field only reaches the step log.
+const maxVerificationBlockedBytes = 300
+
+// fixSummarySchema is commitSummarySchema plus the optional verification_blocked
+// field a fixer fills when the tool that would verify its edits is missing. It
+// stays optional so a fixer with nothing to report omits it.
+var fixSummarySchema = json.RawMessage(fmt.Sprintf(`{
+	"type": "object",
+	"properties": {
+		"summary": {"type": "string", "maxLength": %d},
+		"verification_blocked": {"type": "string", "maxLength": %d}
+	},
+	"required": ["summary"]
+}`, config.MaxFixMessageSummaryBytes, maxVerificationBlockedBytes))
+
+// blockedVerification returns the bounded, single-line verification_blocked
+// text of a fix result, or "" when the agent reported none or its output does
+// not parse. A parse failure is not worth failing a committed fix over: the
+// summary extraction already reports unparsable output.
+func blockedVerification(result *agent.Result) string {
+	if result == nil || result.Output == nil {
+		return ""
+	}
+	var parsed struct {
+		VerificationBlocked string `json:"verification_blocked"`
+	}
+	if err := json.Unmarshal(result.Output, &parsed); err != nil {
+		return ""
+	}
+	blocked := strings.Join(strings.Fields(parsed.VerificationBlocked), " ")
+	if len(blocked) > maxVerificationBlockedBytes {
+		blocked = strings.ToValidUTF8(blocked[:maxVerificationBlockedBytes], "")
+	}
+	return blocked
+}
+
+// logBlockedVerification makes a fix round whose verification could not run
+// visible in the step log. A committed round is labelled unverified; a round
+// that changed nothing is labelled distinctly from the ordinary "no agent
+// changes to commit", which reads as "nothing needed fixing".
+func logBlockedVerification(sctx *pipeline.StepContext, blocked string, committed bool) {
+	switch {
+	case blocked == "":
+	case committed:
+		sctx.Log(fmt.Sprintf("fixes committed unverified, verification blocked: %s", blocked))
+	default:
+		sctx.Log(fmt.Sprintf("agent made no edits and reported verification blocked: %s; the findings were not fixed", blocked))
+	}
+}
 
 // hasBlockingFindings returns true if any finding has error or warning severity.
 func hasBlockingFindings(items []Finding) bool {
@@ -516,10 +571,14 @@ func executeFixMode(sctx *pipeline.StepContext, stepName types.StepName, opts fi
 	if purpose == "" {
 		purpose = string(stepName) + "-fix"
 	}
+	schema := commitSummarySchema
+	if opts.ReportBlockedVerification {
+		schema = fixSummarySchema
+	}
 	runOpts := agent.RunOpts{
 		Prompt:     fixerPrompt(opts.Prompt),
 		CWD:        sctx.WorkDir,
-		JSONSchema: commitSummarySchema,
+		JSONSchema: schema,
 		OnChunk:    sctx.LogChunk,
 		Purpose:    purpose,
 		Workload:   opts.Workload,
@@ -552,6 +611,9 @@ func executeFixMode(sctx *pipeline.StepContext, stepName types.StepName, opts fi
 	committed, err := commitAgentFixesWithResult(sctx, stepName, summary, opts.FallbackSummary, result)
 	if err != nil {
 		return "", err
+	}
+	if opts.ReportBlockedVerification {
+		logBlockedVerification(sctx, blockedVerification(result), committed)
 	}
 	return fixResultSummary(committed), nil
 }

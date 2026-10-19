@@ -48,7 +48,7 @@ metadata:
 
 **Review Fixer Verification Discipline (`internal/pipeline/steps/review.go`)**
 
-- The review-fix prompt requires all fixes before one focused verification limited to the changed area and forbids the whole repository test/lint suite during the fix round.
+- The review-fix prompt requires all fixes before one focused verification limited to the changed area and forbids the whole repository test/lint suite during the fix round. A missing verification tool never licenses fewer edits: the prompt and the shared steering sentence ("stop searching there") say so, the fix result schema (`fixSummarySchema`) carries an optional `verification_blocked`, and `logBlockedVerification` logs an unverified commit or a no-edit round that cited a missing tool.
   The dedicated Test and Lint steps are the authoritative gates, although their coverage may be focused when commands are unconfigured.
   This is a prompt contract, not an enforced sandbox.
   Regression: `TestReviewStep_FixMode_FocusedVerificationContract`.
