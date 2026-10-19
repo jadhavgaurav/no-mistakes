@@ -221,15 +221,24 @@ func forceKillShellCommand(cmd *exec.Cmd) error {
 	return nil
 }
 
+// ShellCommandGroupActive reports whether the command's job still holds a live
+// process. The count is read right after the leader exits, when it can still
+// include a process that is already leaving (a console host that joined the job,
+// or accounting that lags the exit), so a nonzero count is polled for a short
+// bounded window first. Only a process that stays alive through the whole
+// window is reported as active.
 func ShellCommandGroupActive(cmd *exec.Cmd) (bool, error) {
 	job, ok := shellCommandJob(cmd)
 	if !ok || !job.assigned.Load() {
 		return false, errors.New("command has no assigned job")
 	}
-	var info jobObjectBasicAccountingInformation
-	err := windows.QueryInformationJobObject(job.handle, windows.JobObjectBasicAccountingInformation,
-		uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info)), nil)
-	return info.ActiveProcesses > 0, err
+	active, err := settleActiveCount(func() (uint32, error) {
+		var info jobObjectBasicAccountingInformation
+		err := windows.QueryInformationJobObject(job.handle, windows.JobObjectBasicAccountingInformation,
+			uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info)), nil)
+		return info.ActiveProcesses, err
+	}, activeSettleWindow, activeSettleInterval, time.Sleep)
+	return active > 0, err
 }
 
 func waitForWindowsJobExit(job windows.Handle, window time.Duration) {

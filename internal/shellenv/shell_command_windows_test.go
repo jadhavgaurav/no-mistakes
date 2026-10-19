@@ -323,3 +323,83 @@ func (w wrappedErr) Error() string { return "wrapped: " + w.e.Error() }
 func (w wrappedErr) Unwrap() error { return w.e }
 
 func wrapErr(e error) error { return wrappedErr{e: e} }
+
+// TestShellCommandGroupActiveAcceptsCleanChildlessExit is the regression for
+// the completion check refusing a leader that exited cleanly and started
+// nothing: the job's process count can still read nonzero for a moment after
+// the exit, and the check must settle to zero instead of reporting a child.
+func TestShellCommandGroupActiveAcceptsCleanChildlessExit(t *testing.T) {
+	cmd := exec.CommandContext(context.Background(), "cmd.exe", "/d", "/c", "exit", "0")
+	ConfigureShellCommand(cmd)
+	if _, ok := shellCommandJob(cmd); !ok {
+		t.Skip("job object setup unavailable")
+	}
+	if err := StartShellCommand(cmd); err != nil {
+		t.Fatalf("StartShellCommand() error = %v", err)
+	}
+	defer TerminateShellCommandGroup(cmd)
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("leader did not exit cleanly: %v", err)
+	}
+
+	active, err := ShellCommandGroupActive(cmd)
+	if err != nil {
+		t.Fatalf("ShellCommandGroupActive() error = %v", err)
+	}
+	if active {
+		t.Fatal("ShellCommandGroupActive() = true after a clean, childless exit; want false")
+	}
+}
+
+// TestShellCommandGroupActiveRefusesLiveChildAfterBoundedSettle keeps the check
+// fail-closed: a child the leader left running stays in the job, so it is still
+// reported, and only after the bounded settle window has been spent.
+func TestShellCommandGroupActiveRefusesLiveChildAfterBoundedSettle(t *testing.T) {
+	dir := t.TempDir()
+	ready := filepath.Join(dir, "ready")
+	// `start /b` returns as soon as the child is launched, so cmd.exe exits
+	// while the test helper it started keeps running inside the same job.
+	cmd := exec.CommandContext(context.Background(), "cmd.exe", "/d", "/c",
+		`start /b %NM_WINDOWS_HELPER_EXE% -test.run=TestWindowsCommandCancellationHelper`)
+	cmd.Env = append(os.Environ(),
+		"NM_WINDOWS_COMMAND_HELPER=ignore",
+		"NM_WINDOWS_HELPER_EXE="+os.Args[0],
+		"NM_WINDOWS_COMMAND_READY="+ready,
+		"NM_WINDOWS_COMMAND_CLEANUP="+filepath.Join(dir, "cleanup"),
+	)
+	ConfigureShellCommand(cmd)
+	if _, ok := shellCommandJob(cmd); !ok {
+		t.Skip("job object setup unavailable")
+	}
+	if err := StartShellCommand(cmd); err != nil {
+		t.Fatalf("StartShellCommand() error = %v", err)
+	}
+	defer TerminateShellCommandGroup(cmd)
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, err := os.Stat(ready); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the child the leader started never reported ready")
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("leader did not exit cleanly: %v", err)
+	}
+
+	started := time.Now()
+	active, err := ShellCommandGroupActive(cmd)
+	elapsed := time.Since(started)
+	if err != nil {
+		t.Fatalf("ShellCommandGroupActive() error = %v", err)
+	}
+	if !active {
+		t.Fatal("ShellCommandGroupActive() = false with a live child in the job; want true")
+	}
+	if elapsed < activeSettleWindow-50*time.Millisecond {
+		t.Errorf("a live child was reported after %s, before the %s settle window ended", elapsed, activeSettleWindow)
+	}
+}
