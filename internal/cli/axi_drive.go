@@ -1776,7 +1776,7 @@ func runAxiRespond(cmd *cobra.Command, ra respondArgs) error {
 		}
 		if act == types.ActionAbort && strings.Contains(err.Error(), legacyApprovalReasonRefusal) {
 			return emitError(cmd, 1, "the running daemon is too old to record an abort reason; nothing was recorded",
-				"A restart refuses while runs are active: review them with `no-mistakes daemon status`, then run `no-mistakes daemon restart --force` so the current binary serves it, and send the abort again")
+				"A plain `no-mistakes daemon restart` refuses while runs are active and lists every run, in all repositories, that a restart would interrupt: read that list, then run `no-mistakes daemon restart --force` so the current binary serves it, and send the abort again")
 		}
 		return emitError(cmd, 1, fmt.Sprintf("respond to %s: %v", stepName, err))
 	}

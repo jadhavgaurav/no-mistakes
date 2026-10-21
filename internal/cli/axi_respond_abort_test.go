@@ -180,4 +180,12 @@ func TestAxiRespond_AbortExplainsAnOlderDaemonThatCannotRecordTheReason(t *testi
 	if strings.Contains(out, "applies only to Test approval") {
 		t.Fatalf("the misleading legacy refusal leaked into the output:\n%s", out)
 	}
+	// `daemon status` never lists runs, so it must not be offered as the way
+	// to review what a forced restart interrupts.
+	if strings.Contains(out, "daemon status") {
+		t.Fatalf("hint points at `daemon status`, which does not list runs:\n%s", out)
+	}
+	if !strings.Contains(out, "lists every run") {
+		t.Fatalf("hint does not say where the interrupted runs are listed:\n%s", out)
+	}
 }
