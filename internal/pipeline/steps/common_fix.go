@@ -118,13 +118,15 @@ func blockedVerification(result *agent.Result) string {
 }
 
 // logBlockedVerification makes a fix round whose verification could not run
-// visible in the step log. A committed round is labelled unverified; a round
-// that changed nothing is labelled distinctly from the ordinary "no agent
-// changes to commit", which reads as "nothing needed fixing".
-func logBlockedVerification(sctx *pipeline.StepContext, blocked string, committed bool) {
+// visible in the step log. A round that produced a commit, whether the
+// pipeline committed the fixer's edits or the fixer ran `git commit` itself, is
+// labelled unverified; a round that changed nothing is labelled distinctly from
+// the ordinary "no agent changes to commit", which reads as "nothing needed
+// fixing".
+func logBlockedVerification(sctx *pipeline.StepContext, blocked string, produced bool) {
 	switch {
 	case blocked == "":
-	case committed:
+	case produced:
 		sctx.Log(fmt.Sprintf("fixes committed unverified, verification blocked: %s", blocked))
 	default:
 		sctx.Log(fmt.Sprintf("agent made no edits and reported verification blocked: %s; the findings were not fixed", blocked))
@@ -583,8 +585,18 @@ func executeFixMode(sctx *pipeline.StepContext, stepName types.StepName, opts fi
 		Purpose:    purpose,
 		Workload:   opts.Workload,
 	}
-	var result *agent.Result
+	// The fixer may commit its own work and leave a clean worktree, which
+	// commitAgentFixesWithResult reports as "not committed". HEAD movement is
+	// what tells that round apart from one that made no edits.
 	var err error
+	headBeforeAgent := ""
+	if opts.ReportBlockedVerification {
+		headBeforeAgent, err = git.HeadSHA(sctx.Ctx, sctx.WorkDir)
+		if err != nil {
+			return "", fmt.Errorf("resolve head before %s fix: %w", stepName, err)
+		}
+	}
+	var result *agent.Result
 	if opts.RunAgent != nil {
 		result, err = opts.RunAgent(runOpts)
 	} else {
@@ -613,7 +625,11 @@ func executeFixMode(sctx *pipeline.StepContext, stepName types.StepName, opts fi
 		return "", err
 	}
 	if opts.ReportBlockedVerification {
-		logBlockedVerification(sctx, blockedVerification(result), committed)
+		headAfterAgent, err := git.HeadSHA(sctx.Ctx, sctx.WorkDir)
+		if err != nil {
+			return "", fmt.Errorf("resolve head after %s fix: %w", stepName, err)
+		}
+		logBlockedVerification(sctx, blockedVerification(result), committed || headAfterAgent != headBeforeAgent)
 	}
 	return fixResultSummary(committed), nil
 }

@@ -19,6 +19,19 @@ import (
 // step log.
 func runReviewFixRound(t *testing.T, fixOutput string, edit bool) (agent.RunOpts, []string) {
 	t.Helper()
+	if !edit {
+		return runReviewFixRoundWith(t, fixOutput, nil)
+	}
+	return runReviewFixRoundWith(t, fixOutput, func(dir string) error {
+		return os.WriteFile(filepath.Join(dir, "review-fix.txt"), []byte("fixed"), 0o644)
+	})
+}
+
+// runReviewFixRoundWith is runReviewFixRound with the fixer's worktree action
+// supplied by the caller, so a fixer that runs `git commit` itself can be
+// driven too. A nil action makes no edits.
+func runReviewFixRoundWith(t *testing.T, fixOutput string, fixerAction func(dir string) error) (agent.RunOpts, []string) {
+	t.Helper()
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	gitCmd(t, dir, "checkout", "--detach", headSHA)
 
@@ -30,8 +43,8 @@ func runReviewFixRound(t *testing.T, fixOutput string, edit bool) (agent.RunOpts
 			calls++
 			if calls == 1 {
 				fixOpts = opts
-				if edit {
-					if err := os.WriteFile(filepath.Join(dir, "review-fix.txt"), []byte("fixed"), 0o644); err != nil {
+				if fixerAction != nil {
+					if err := fixerAction(dir); err != nil {
 						return nil, err
 					}
 				}
@@ -121,6 +134,44 @@ func TestReviewFixLogsNoEditRoundThatCitesMissingTool(t *testing.T) {
 	}
 	if !logsContain(logs, "no agent changes to commit") {
 		t.Errorf("ordinary no-change line should still be logged: %q", logs)
+	}
+}
+
+// commitInWorktree makes a fixer-authored commit, as a fixer that runs
+// `git commit` itself does, leaving the worktree clean.
+func commitInWorktree(t *testing.T) func(dir string) error {
+	return func(dir string) error {
+		if err := os.WriteFile(filepath.Join(dir, "review-fix.txt"), []byte("fixed"), 0o644); err != nil {
+			return err
+		}
+		gitCmd(t, dir, "add", "review-fix.txt")
+		gitCmd(t, dir, "commit", "-m", "fixer: address findings")
+		return nil
+	}
+}
+
+// A fixer that commits its own work leaves nothing for the pipeline to commit,
+// but the round did produce a fix commit: the log must not claim that the agent
+// made no edits.
+func TestReviewFixLogsUnverifiedCommitWhenFixerCommittedItself(t *testing.T) {
+	t.Parallel()
+	_, logs := runReviewFixRoundWith(t, `{"summary":"address findings","verification_blocked":"pytest missing"}`, commitInWorktree(t))
+	if !logsContain(logs, "no agent changes to commit") {
+		t.Fatalf("test did not exercise the clean-worktree path: %q", logs)
+	}
+	if !logsContain(logs, "fixes committed unverified, verification blocked: pytest missing") {
+		t.Errorf("fixer-committed round did not log blocked verification as unverified: %q", logs)
+	}
+	if logsContain(logs, "made no edits") || logsContain(logs, "the findings were not fixed") {
+		t.Errorf("fixer-committed round logged as a no-edit round: %q", logs)
+	}
+}
+
+func TestReviewFixLogsNothingExtraWhenFixerCommittedItselfAndVerificationRan(t *testing.T) {
+	t.Parallel()
+	_, logs := runReviewFixRoundWith(t, `{"summary":"address findings"}`, commitInWorktree(t))
+	if logsContain(logs, "verification blocked") {
+		t.Errorf("unexpected blocked-verification log: %q", logs)
 	}
 }
 
