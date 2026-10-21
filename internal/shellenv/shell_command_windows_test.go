@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"syscall"
 	"testing"
 	"time"
 
@@ -360,9 +361,13 @@ func TestShellCommandGroupActiveRefusesLiveChildImmediately(t *testing.T) {
 	ready := filepath.Join(dir, "ready")
 	// `start /b` returns as soon as the child is launched, so cmd.exe exits
 	// while the test helper it started keeps running inside the same job. The
-	// empty title and the quotes keep a path with spaces in one piece.
-	cmd := exec.CommandContext(context.Background(), "cmd.exe", "/d", "/c",
-		`start "" /b "%NM_WINDOWS_HELPER_EXE%" -test.run=TestWindowsCommandCancellationHelper`)
+	// empty title and the quotes keep a path with spaces in one piece. Go would
+	// escape those quotes as \" when it builds the command line from Args, and
+	// cmd.exe does not understand that, so the line is passed through verbatim.
+	cmd := exec.CommandContext(context.Background(), "cmd.exe")
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CmdLine: `cmd.exe /d /c start "" /b "%NM_WINDOWS_HELPER_EXE%" -test.run=TestWindowsCommandCancellationHelper`,
+	}
 	cmd.Env = append(os.Environ(),
 		"NM_WINDOWS_COMMAND_HELPER=ignore",
 		"NM_WINDOWS_HELPER_EXE="+os.Args[0],
