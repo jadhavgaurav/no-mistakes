@@ -48,10 +48,10 @@ metadata:
 
 **Review Fixer Verification Discipline (`internal/pipeline/steps/review.go`)**
 
-- The review-fix prompt requires all fixes before one focused verification limited to the changed area and forbids the whole repository test/lint suite during the fix round. A missing verification tool never licenses fewer edits: the prompt and the shared steering sentence ("stop searching there") say so, the fix result schema (`fixSummarySchema`) carries an optional `verification_blocked`, and `logBlockedVerification` logs an unverified commit or a no-edit round that cited a missing tool.
+- The review-fix prompt requires all fixes before one focused verification limited to the changed area and forbids the whole repository test/lint suite during the fix round. A missing verification tool never licenses fewer edits: the prompt and the shared steering sentence ("stop searching there") say so, the fix result schema (`fixSummarySchema`) carries an optional `verification_blocked`, and `logBlockedVerification` logs an unverified commit or a no-edit round that cited a missing tool. A fixer that runs `git commit` itself leaves the worktree clean, so the log decides committed-vs-no-edit from HEAD movement across the fixer turn rather than from the pipeline's own commit step.
   The dedicated Test and Lint steps are the authoritative gates, although their coverage may be focused when commands are unconfigured.
   This is a prompt contract, not an enforced sandbox.
-  Regressions: `TestReviewStep_FixMode_FocusedVerificationContract`, `TestReviewFixPromptKeepsEditsWhenVerificationToolIsMissing`, `TestReviewFixLogsUnverifiedCommit`, `TestReviewFixLogsNoEditRoundThatCitesMissingTool`, `TestReviewFixLogsNothingExtraWhenVerificationRan`, `TestBlockedVerificationBoundsAndNormalizes` (`internal/pipeline/steps/fix_verification_blocked_test.go`).
+  Regressions: `TestReviewStep_FixMode_FocusedVerificationContract`, `TestReviewFixPromptKeepsEditsWhenVerificationToolIsMissing`, `TestReviewFixLogsUnverifiedCommit`, `TestReviewFixLogsNoEditRoundThatCitesMissingTool`, `TestReviewFixLogsUnverifiedCommitWhenFixerCommittedItself`, `TestReviewFixLogsNothingExtraWhenFixerCommittedItselfAndVerificationRan`, `TestReviewFixLogsNothingExtraWhenVerificationRan`, `TestBlockedVerificationBoundsAndNormalizes` (`internal/pipeline/steps/fix_verification_blocked_test.go`).
 
 **Remedy-Scope Discipline in the Review Prompts (`internal/pipeline/steps/review.go`)**
 
