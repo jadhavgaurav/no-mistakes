@@ -326,8 +326,8 @@ func wrapErr(e error) error { return wrappedErr{e: e} }
 
 // TestShellCommandGroupActiveAcceptsCleanChildlessExit is the regression for
 // the completion check refusing a leader that exited cleanly and started
-// nothing: the job's process count can still read nonzero for a moment after
-// the exit, and the check must settle to zero instead of reporting a child.
+// nothing: the job can still list the console host the leader's console got, or
+// a stale entry for the leader, and neither is a child.
 func TestShellCommandGroupActiveAcceptsCleanChildlessExit(t *testing.T) {
 	cmd := exec.CommandContext(context.Background(), "cmd.exe", "/d", "/c", "exit", "0")
 	ConfigureShellCommand(cmd)
@@ -347,20 +347,22 @@ func TestShellCommandGroupActiveAcceptsCleanChildlessExit(t *testing.T) {
 		t.Fatalf("ShellCommandGroupActive() error = %v", err)
 	}
 	if active {
-		t.Fatal("ShellCommandGroupActive() = true after a clean, childless exit; want false")
+		procs, _ := inspectJobProcesses(mustShellCommandJob(t, cmd).handle)
+		t.Fatalf("ShellCommandGroupActive() = true after a clean, childless exit (leader %d, job processes %+v); want false", cmd.Process.Pid, procs)
 	}
 }
 
-// TestShellCommandGroupActiveRefusesLiveChildAfterBoundedSettle keeps the check
-// fail-closed: a child the leader left running stays in the job, so it is still
-// reported, and only after the bounded settle window has been spent.
-func TestShellCommandGroupActiveRefusesLiveChildAfterBoundedSettle(t *testing.T) {
+// TestShellCommandGroupActiveRefusesLiveChildImmediately keeps the check
+// fail-closed: a child the leader left running stays in the job and is reported
+// at once, without a grace window it could finish inside.
+func TestShellCommandGroupActiveRefusesLiveChildImmediately(t *testing.T) {
 	dir := t.TempDir()
 	ready := filepath.Join(dir, "ready")
 	// `start /b` returns as soon as the child is launched, so cmd.exe exits
-	// while the test helper it started keeps running inside the same job.
+	// while the test helper it started keeps running inside the same job. The
+	// empty title and the quotes keep a path with spaces in one piece.
 	cmd := exec.CommandContext(context.Background(), "cmd.exe", "/d", "/c",
-		`start /b %NM_WINDOWS_HELPER_EXE% -test.run=TestWindowsCommandCancellationHelper`)
+		`start "" /b "%NM_WINDOWS_HELPER_EXE%" -test.run=TestWindowsCommandCancellationHelper`)
 	cmd.Env = append(os.Environ(),
 		"NM_WINDOWS_COMMAND_HELPER=ignore",
 		"NM_WINDOWS_HELPER_EXE="+os.Args[0],
@@ -399,7 +401,16 @@ func TestShellCommandGroupActiveRefusesLiveChildAfterBoundedSettle(t *testing.T)
 	if !active {
 		t.Fatal("ShellCommandGroupActive() = false with a live child in the job; want true")
 	}
-	if elapsed < activeSettleWindow-50*time.Millisecond {
-		t.Errorf("a live child was reported after %s, before the %s settle window ended", elapsed, activeSettleWindow)
+	if elapsed > time.Second {
+		t.Errorf("a live child was reported after %s; the check must not wait for a child to drain", elapsed)
 	}
+}
+
+func mustShellCommandJob(t *testing.T, cmd *exec.Cmd) *shellCommandJobState {
+	t.Helper()
+	job, ok := shellCommandJob(cmd)
+	if !ok {
+		t.Fatal("command has no job")
+	}
+	return job
 }
