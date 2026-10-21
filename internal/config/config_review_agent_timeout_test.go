@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
 func reviewTimeoutRepo(t *testing.T, value string) *RepoConfig {
@@ -25,8 +27,16 @@ func TestReviewAgentTimeout_RepositoryTightensGlobal(t *testing.T) {
 	if cfg.ReviewAgentTimeout != 10*time.Minute {
 		t.Fatalf("review timeout = %v, want the repository's 10m", cfg.ReviewAgentTimeout)
 	}
-	if !cfg.AgentTimeoutsConfigured {
-		t.Error("a tightened timeout must count as configured so budget cuts are not retried")
+	if !cfg.AgentTimeoutConfiguredFor(types.StepReview) {
+		t.Error("a tightened timeout must count as configured for Review so budget cuts are not retried")
+	}
+	if cfg.AgentTimeoutsConfigured {
+		t.Error("the shared flag read for every step must stay false: only Review's budget changed")
+	}
+	for _, step := range []types.StepName{types.StepDocument, types.StepLint, types.StepTest} {
+		if cfg.AgentTimeoutConfiguredFor(step) {
+			t.Errorf("%s keeps its default-budget crash retry: the repository did not configure its timeout", step)
+		}
 	}
 	if cfg.ReviewAgentWorkingTimeout != 2*time.Hour {
 		t.Errorf("working cap = %v, the repository key must not touch it", cfg.ReviewAgentWorkingTimeout)
@@ -43,7 +53,7 @@ func TestReviewAgentTimeout_RepositoryCannotLoosenGlobal(t *testing.T) {
 		if cfg.ReviewAgentTimeout != 30*time.Minute {
 			t.Errorf("repository %s: review timeout = %v, want the global 30m", repoValue, cfg.ReviewAgentTimeout)
 		}
-		if cfg.AgentTimeoutsConfigured {
+		if cfg.AgentTimeoutsConfigured || cfg.ReviewAgentTimeoutTightened || cfg.AgentTimeoutConfiguredFor(types.StepReview) {
 			t.Errorf("repository %s: an ignored value must not mark timeouts configured", repoValue)
 		}
 	}
@@ -55,7 +65,7 @@ func TestReviewAgentTimeout_AbsentKeepsGlobal(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := Merge(globalWithReviewTimeout(DefaultReviewAgentTimeout), EffectiveRepoConfig(&RepoConfig{}, trusted, false))
-	if cfg.ReviewAgentTimeout != DefaultReviewAgentTimeout || cfg.AgentTimeoutsConfigured {
+	if cfg.ReviewAgentTimeout != DefaultReviewAgentTimeout || cfg.AgentTimeoutConfiguredFor(types.StepReview) {
 		t.Fatalf("absent key changed behavior: timeout=%v configured=%v", cfg.ReviewAgentTimeout, cfg.AgentTimeoutsConfigured)
 	}
 }

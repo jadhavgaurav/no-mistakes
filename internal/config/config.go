@@ -900,6 +900,13 @@ type Config struct {
 	Worktree                  Worktree
 	Commands                  Commands
 	CommandOverrides          map[string]CommandOverride
+	// ReviewAgentTimeoutTightened is set when the trusted repository's
+	// review.agent_timeout cut the Review budget below the global one. It is
+	// kept apart from AgentTimeoutsConfigured because that flag is read for
+	// every step: a repository that only shortens Review must not change the
+	// crash-retry eligibility of Document, Lint, or Test, whose budgets it did
+	// not touch. Read it through AgentTimeoutConfiguredFor.
+	ReviewAgentTimeoutTightened bool
 	// Gates are the repository's extra checks, already trusted-only by the
 	// time they reach here (EffectiveRepoConfig sourced them from the trusted
 	// default-branch copy).
@@ -3860,6 +3867,14 @@ func (c *Config) AutoFixLimit(step types.StepName) int {
 	}
 }
 
+// AgentTimeoutConfiguredFor reports whether a timeout the operator configured
+// governs step, which makes a budget cut on it deliberate rather than a crash
+// worth a crash retry. The global timeouts apply to every step; a repository's
+// tightened review.agent_timeout applies to Review only.
+func (c *Config) AgentTimeoutConfiguredFor(step types.StepName) bool {
+	return c.AgentTimeoutsConfigured || (step == types.StepReview && c.ReviewAgentTimeoutTightened)
+}
+
 // Merge combines global and per-repo config. Per-repo agent values, including
 // ordered fallback lists, override global agent values when non-empty. Commands
 // and ignore patterns come from repo config only.
@@ -4053,10 +4068,11 @@ func merge(global *GlobalConfig, repo *RepoConfig, override *RepositoryOverride)
 
 	// repo.Review is trusted-only (EffectiveRepoConfig). The repository value
 	// only ever tightens the global budget, and a tightened budget counts as a
-	// configured timeout for crash-retry purposes, like any other configured one.
+	// configured timeout for crash-retry purposes, like any other configured
+	// one, but only for the Review step whose budget it changed.
 	if repoTimeout := trustedReviewAgentTimeout(repo.Review); repoTimeout > 0 && repoTimeout < cfg.ReviewAgentTimeout {
 		cfg.ReviewAgentTimeout = repoTimeout
-		cfg.AgentTimeoutsConfigured = true
+		cfg.ReviewAgentTimeoutTightened = true
 	}
 
 	if override != nil {
