@@ -380,10 +380,42 @@ func TestPublishedHeadBoundedContext_AddsDeadlineWithoutTouchingTheRunContext(t 
 	if !ok {
 		t.Fatal("remote read has no deadline, so a stalled connection would block the repair")
 	}
-	if remaining := time.Until(deadline); remaining <= 0 || remaining > defaultPublishedHeadResolveWindow {
-		t.Fatalf("deadline in %s, want within %s", remaining, defaultPublishedHeadResolveWindow)
+	if remaining := time.Until(deadline); remaining <= 0 || remaining > publishedHeadResolveWindow {
+		t.Fatalf("deadline in %s, want within %s", remaining, publishedHeadResolveWindow)
 	}
 	if _, ok := sctx.Ctx.Deadline(); ok {
 		t.Fatal("the run context must keep no deadline")
+	}
+}
+
+func TestCIStep_CommitRepair_StalledRemoteReadFailsClosedWithinItsDeadline(t *testing.T) {
+	original := publishedHeadResolveWindow
+	publishedHeadResolveWindow = 300 * time.Millisecond
+	t.Cleanup(func() { publishedHeadResolveWindow = original })
+
+	sctx, dir, _ := agentCommitContext(t, nil)
+	sctx.Config.CI.RevalidateRepairs = true
+	sctx.Repo.ForkURL = hangingGitRemote(t)
+	agentCommit(t, dir, "stalled.txt", "fix(tests): agent subject")
+	agentHead := gitCmd(t, dir, "rev-parse", "HEAD")
+
+	// The run context carries no deadline, so only the read's own bound can end it.
+	done := make(chan error, 1)
+	go func() {
+		_, err := (&CIStep{}).commitRepair(sctx, "repair", nil)
+		done <- err
+	}()
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(20 * time.Second):
+		t.Fatal("commitRepair is still blocked on the remote read, the deadline did not apply")
+	}
+
+	if err == nil || !strings.Contains(err.Error(), "already published") {
+		t.Fatalf("err = %v, want a refusal because the published state could not be read", err)
+	}
+	if got := gitCmd(t, dir, "rev-parse", "HEAD"); got != agentHead {
+		t.Fatalf("HEAD = %s, want the agent's commit %s left untouched", got, agentHead)
 	}
 }

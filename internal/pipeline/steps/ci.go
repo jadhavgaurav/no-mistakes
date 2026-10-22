@@ -16,10 +16,11 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
-const (
-	defaultBaseBranchTipResolveWindow = 30 * time.Second
-	defaultPublishedHeadResolveWindow = 30 * time.Second
-)
+const defaultBaseBranchTipResolveWindow = 30 * time.Second
+
+// publishedHeadResolveWindow bounds each remote read of the published branch
+// head. Overridable so tests can drive the deadline without waiting it out.
+var publishedHeadResolveWindow = 30 * time.Second
 
 // CI monitoring status messages. These are surfaced to the user and parsed by
 // the TUI and the agent-facing axi commands to distinguish passed checks from

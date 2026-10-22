@@ -583,9 +583,9 @@ func (s *CIStep) rerunTransientChecks(sctx *pipeline.StepContext, host scm.Host,
 }
 
 // publishedHeadBoundedContext returns a copy of sctx whose context ends after
-// defaultPublishedHeadResolveWindow, so a stalled remote read cannot block a step.
+// publishedHeadResolveWindow, so a stalled remote read cannot block a step.
 func publishedHeadBoundedContext(sctx *pipeline.StepContext) (*pipeline.StepContext, context.CancelFunc) {
-	ctx, cancel := context.WithTimeout(sctx.Ctx, defaultPublishedHeadResolveWindow)
+	ctx, cancel := context.WithTimeout(sctx.Ctx, publishedHeadResolveWindow)
 	bounded := *sctx
 	bounded.Ctx = ctx
 	return &bounded, cancel
