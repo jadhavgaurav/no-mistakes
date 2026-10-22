@@ -50,3 +50,18 @@ func liveJobProcesses(procs []jobProcess, leaderPID uint32) int {
 	}
 	return live
 }
+
+// jobHasLiveProcesses decides whether a job still holds a process that makes
+// the leader's clean exit unverified. The job's process list and the per
+// process inspections are not one atomic read: a listed child can start a new
+// process after the list was read and exit before it is inspected, which leaves
+// that child classified as exited while its own child was never listed.
+// totalBefore and totalAfter are the job's TotalProcesses counter, which counts
+// every process ever assigned to the job (exited ones included), read before the
+// list and again after the last inspection. If it moved, some process joined
+// the job while it was being inspected, so the classification of procs cannot be
+// trusted and the job is reported as active without waiting. This also
+// covers a new process that reused the id of a listed one.
+func jobHasLiveProcesses(totalBefore, totalAfter uint32, procs []jobProcess, leaderPID uint32) bool {
+	return totalAfter != totalBefore || liveJobProcesses(procs, leaderPID) > 0
+}

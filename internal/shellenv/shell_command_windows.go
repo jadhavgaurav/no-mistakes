@@ -228,18 +228,41 @@ func forceKillShellCommand(cmd *exec.Cmd) error {
 // and inspects each one: a stale listing of a process that has exited, and the
 // operating system's console host that the leader itself started, are not
 // children. Everything else, including a process that cannot be inspected, is
-// reported. The answer is taken at once and never waits for a child to finish,
-// so it is as strict as the process-group probe on other platforms.
+// reported. The job's TotalProcesses counter is read before the list and again
+// after the last inspection, and the job is reported active if it moved, so a
+// process started while the list was being inspected cannot slip past. The
+// answer is taken at once and never waits for a child to finish, so it is as
+// strict as the process-group probe on other platforms.
 func ShellCommandGroupActive(cmd *exec.Cmd) (bool, error) {
 	job, ok := shellCommandJob(cmd)
 	if !ok || !job.assigned.Load() || cmd.Process == nil {
 		return false, errors.New("command has no assigned job")
 	}
+	totalBefore, err := jobTotalProcesses(job.handle)
+	if err != nil {
+		return false, err
+	}
 	procs, err := inspectJobProcesses(job.handle)
 	if err != nil {
 		return false, err
 	}
-	return liveJobProcesses(procs, uint32(cmd.Process.Pid)) > 0, nil
+	totalAfter, err := jobTotalProcesses(job.handle)
+	if err != nil {
+		return false, err
+	}
+	return jobHasLiveProcesses(totalBefore, totalAfter, procs, uint32(cmd.Process.Pid)), nil
+}
+
+// jobTotalProcesses returns how many processes have ever been assigned to the
+// job, including those that have exited.
+func jobTotalProcesses(job windows.Handle) (uint32, error) {
+	var info jobObjectBasicAccountingInformation
+	err := windows.QueryInformationJobObject(job, windows.JobObjectBasicAccountingInformation,
+		uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info)), nil)
+	if err != nil {
+		return 0, fmt.Errorf("read job accounting: %w", err)
+	}
+	return info.TotalProcesses, nil
 }
 
 // stillActiveExitCode is the exit code GetExitCodeProcess reports for a process
