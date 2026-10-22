@@ -40,9 +40,15 @@ func conformAgentCommits(sctx *pipeline.StepContext, stepName types.StepName, re
 	if head == anchor {
 		return nil
 	}
-	// An unfinished rebase or merge makes HEAD a partial result; leave it alone.
-	if rebaseInProgress(sctx.Ctx, sctx.WorkDir) || mergeInProgress(sctx.Ctx, sctx.WorkDir) {
+	// An unfinished rebase makes HEAD a partial result; leave it alone.
+	if rebaseInProgress(sctx.Ctx, sctx.WorkDir) {
 		return nil
+	}
+	// The caller's commit would conclude an unfinished merge into a merge commit,
+	// the non-linear shape refused below, with the agent's own commits above the
+	// recorded head still unshaped.
+	if mergeInProgress(sctx.Ctx, sctx.WorkDir) {
+		return fmt.Errorf("%s agent left a merge unfinished: %w; refusing to publish agent commits that bypass the commit settings", stepName, errAgentCommitsNotLinear)
 	}
 	descends, err := headDescendsFrom(sctx, anchor, head)
 	if err != nil {

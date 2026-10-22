@@ -419,3 +419,28 @@ func TestCIStep_CommitRepair_StalledRemoteReadFailsClosedWithinItsDeadline(t *te
 		t.Fatalf("HEAD = %s, want the agent's commit %s left untouched", got, agentHead)
 	}
 }
+
+func TestCIStep_CommitRepair_UnfinishedMergeAfterAnAgentCommitIsRefused(t *testing.T) {
+	t.Parallel()
+	sctx, dir, headSHA := agentCommitContext(t, nil)
+	sctx.Config.CI.RevalidateRepairs = false
+	gitCmd(t, dir, "checkout", "--detach", headSHA)
+	agentCommit(t, dir, "side.txt", "side")
+	side := gitCmd(t, dir, "rev-parse", "HEAD")
+	gitCmd(t, dir, "checkout", "--detach", headSHA)
+	agentCommit(t, dir, "own.txt", "fix(tests): agent subject")
+	agentHead := gitCmd(t, dir, "rev-parse", "HEAD")
+	// The agent stops after `git merge --no-commit`, leaving MERGE_HEAD behind.
+	gitCmd(t, dir, "merge", "--no-ff", "--no-commit", side)
+
+	_, err := (&CIStep{}).commitRepair(sctx, "repair", nil)
+	if err == nil || !strings.Contains(err.Error(), "not a linear chain") {
+		t.Fatalf("err = %v, want a refusal of the unfinished merge", err)
+	}
+	if got := gitCmd(t, dir, "rev-parse", "HEAD"); got != agentHead {
+		t.Fatalf("HEAD = %s, want the agent's commit %s left untouched", got, agentHead)
+	}
+	if got := gitCmd(t, dir, "rev-parse", "--verify", "MERGE_HEAD"); got != side {
+		t.Fatalf("MERGE_HEAD = %s, want the unfinished merge %s kept", got, side)
+	}
+}
