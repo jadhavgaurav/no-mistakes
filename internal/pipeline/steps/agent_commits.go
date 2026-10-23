@@ -126,7 +126,7 @@ func publishedChainIndex(sctx *pipeline.StepContext, stepName types.StepName, ch
 	// timeout bounds it, and a stalled connection would block the repair.
 	bounded, cancel := publishedHeadBoundedContext(sctx)
 	defer cancel()
-	tip, err := lsRemoteSHA(func(args ...string) (string, error) { return stepGitRun(bounded, args...) }, resolvePushURL(sctx), normalizedBranchRef(sctx.Run.Branch))
+	tip, err := lsRemoteSHA(func(args ...string) (string, error) { return stepGitRunTree(bounded, args...) }, resolvePushURL(sctx), normalizedBranchRef(sctx.Run.Branch))
 	if err != nil {
 		return -1, fmt.Errorf("check which %s agent commits are already published: %w", stepName, err)
 	}
